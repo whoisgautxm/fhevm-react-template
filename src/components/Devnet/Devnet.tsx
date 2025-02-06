@@ -1,69 +1,107 @@
 import { useEffect, useState } from 'react';
 import { getInstance } from '../../fhevmjs';
 import './Devnet.css';
-import { Eip1193Provider } from 'ethers';
+import { Eip1193Provider, ZeroAddress } from 'ethers';
+import { ethers } from 'ethers';
+import IdMapping from '../../../deployments/IdMapping.json';
+import { BrowserProvider } from 'ethers';
 
 const toHexString = (bytes: Uint8Array) =>
   bytes.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '');
 
 export type DevnetProps = {
   account: string;
-  provider: Eip1193Provider;
+  provider: BrowserProvider;
 };
 
-const CONTRACT_ADDRESS = '0x309cf2aae85ad8a1db70ca88cfd4225bf17a7482';
+const CONTRACT_ADDRESS = '0x194CDd095358eBAA5FD02913e5220E2cd7600713';
 
-export const Devnet = ({ account }: DevnetProps) => {
+export const Devnet = ({ account, provider }: DevnetProps) => {
+  const [contractAddress, setContractAddress] = useState(ZeroAddress);
+
+  const [handleUserID, setHandleUserID] = useState('0');
+  const [decryptedBalance, setDecryptedBalance] = useState('???');
+
   const [handles, setHandles] = useState<Uint8Array[]>([]);
   const [encryption, setEncryption] = useState<Uint8Array>();
-  const [eip712, setEip712] =
-    useState<ReturnType<typeof instance.createEIP712>>();
+
+  const [inputValue, setInputValue] = useState(''); // Track the input
+  const [chosenValue, setChosenValue] = useState('0'); // Track the confirmed value
+
+  const [inputValueAddress, setInputValueAddress] = useState('');
+  const [chosenAddress, setChosenAddress] = useState('0x');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const [decryptedSecret, setDecryptedResult] = useState('???');
+  const [counter, setCounter] = useState(0); // useful trick to make the refresh of decryption state work, otherwise contract call will not work correctly (because provider's state won't be updated without a React re-rendering)
+
   const instance = getInstance();
 
-  // Handle EIP712 setup
   useEffect(() => {
-    const { publicKey } = instance.generateKeypair();
-    const eip = instance.createEIP712(publicKey, CONTRACT_ADDRESS);
-    setEip712(eip);
-  }, [instance]);
+    const loadData = async () => {
+      try{
+        let IdMapping = await import(
+          '../../../deployments/IdMapping.json')
+         
+          console.log(
+            `Using ${IdMapping.address} for the token address on Sepolia`,
+          );
+        
 
-  const encrypt = async (val: number) => {
-    const now = Date.now();
-    try {
-      const result = await instance
-        .createEncryptedInput(CONTRACT_ADDRESS, account)
-        .add64(val)
-        .encrypt();
+        setContractAddress(IdMapping.address);
+      } catch (error) {
+        console.error(
+          'Error loading data - you probably forgot to deploy the token contract before running the front-end server:',
+          error,
+        );
+      }
+    };
 
-      console.log(`Took ${(Date.now() - now) / 1000}s`);
-      setHandles(result.handles);
-      setEncryption(result.inputProof);
-    } catch (e) {
-      console.error('Encryption error:', e);
-      console.log(Date.now() - now);
+    loadData();
+  }, []);
+
+  const handleConfirmAddress = () => {
+    const trimmedValue = inputValueAddress.trim().toLowerCase();
+    if (ethers.isAddress(trimmedValue)) {
+      // getAddress returns the checksummed address
+      const checksummedAddress = ethers.getAddress(trimmedValue);
+      setChosenAddress(checksummedAddress);
+      setErrorMessage('');
+    } else {
+      setChosenAddress('0x');
+      setErrorMessage('Invalid Ethereum address.');
+    }
+  };
+
+  const generateUserID = async () => {
+    if (contractAddress != ZeroAddress) {
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(
+        contractAddress,
+        IdMapping.abi,
+        signer
+      );
+      console.log(contract)
+      const tx = await contract.connect(signer).generateId();
+
+      await tx.wait();
+
+      setHandleUserID(handleUserID.toString());
     }
   };
 
   return (
     <div>
-      <dl>
-        <button onClick={() => encrypt(1337)}>Encrypt 1337</button>
-        <dt className="Devnet__title">This is an encryption of 1337:</dt>
-        <dd className="Devnet__dd">
-          <pre className="Devnet__pre">
-            Handle: {handles.length ? toHexString(handles[0]) : ''}
-          </pre>
-          <pre className="Devnet__pre">
-            Input Proof: {encryption ? toHexString(encryption) : ''}
-          </pre>
-        </dd>
-        <dt className="Devnet__title">And this is a EIP-712 token</dt>
-        <dd className="Devnet__dd">
-          <pre className="Devnet__pre">
-            {eip712 ? JSON.stringify(eip712) : ''}
-          </pre>
-        </dd>
-      </dl>
+      <p>User Account: {account}</p>
+      <div>
+        <button 
+          onClick={generateUserID}
+          disabled={contractAddress === ZeroAddress}
+        >
+          Generate User ID
+        </button>
+        <p>Generated User ID: {handleUserID}</p>
+      </div>
     </div>
   );
 };
